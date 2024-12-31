@@ -1,14 +1,10 @@
-import os
-import sys
-import requests
-import json
+import os, sys, requests, json, psycopg2
 from dotenv import load_dotenv
 
-# Definindo diretorios
+# Definindo diretorio atual
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 def get_weather_data():
-    
     env_path = os.path.join(current_dir, '..', '..', '.env')
     load_dotenv(env_path)
     openweather_api_key = os.getenv("OPENWEATHER_API_KEY")
@@ -18,7 +14,7 @@ def get_weather_data():
     limit = 1
 
     if not openweather_api_key or not geocoding_api_key:
-        print("\n API keys not found")
+        print("API keys not found\n")
         sys.exit(1)
 
     # Faz a busca da latitude e longitude da cidade
@@ -35,13 +31,44 @@ def get_weather_data():
     openweather_response = requests.get(f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&units=metric&appid={openweather_api_key}")
 
     if openweather_response.status_code == 200:
+        weather_data = openweather_response.json()
+        print("- Previsões coletadas com sucesso!\n")
 
-        json_data_dir = os.path.join(current_dir, '..', '..', 'json_data')
-        
-        file_path_openweather_data = os.path.join(json_data_dir, "openweather_data.json")
-        with open(file_path_openweather_data, "w") as file:
-            json.dump(openweather_response.json(), file, indent=4)
-            print("\n - Previsoes coletadas com sucesso!\n")
+        # Conecta ao banco de dados PostgreSQL
+        conn = psycopg2.connect(
+            dbname=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT")
+        )
+        cursor = conn.cursor()
+
+        # Verifica se existe conteúdo na coluna openweather_data onde id = 1
+        cursor.execute("""
+            SELECT openweather_data
+            FROM weather_data
+            WHERE id = %s
+        """, (1,))
+        result = cursor.fetchone()
+
+        if result:  # Existe registro com id = 1
+            cursor.execute("""
+                UPDATE weather_data
+                SET openweather_data = %s
+                WHERE id = %s
+            """, (json.dumps(weather_data), 1))
+            print("- Dados atualizados com sucesso!\n")
+        else:  # Não existe registro com id = 1
+            cursor.execute("""
+                INSERT INTO weather_data (id, openweather_data)
+                VALUES (%s, %s)
+            """, (1, json.dumps(weather_data)))
+            print("- Dados inseridos com sucesso!\n")
+            
+        conn.commit()
+        cursor.close()
+        conn.close()
     else:
-        print(f"\n - Erro ao coletar os dados - Weather API retornou o status code: {openweather_response.status_code}")
+        print(f"- Erro ao coletar os dados - Weather API retornou o status code: {openweather_response.status_code}")
         sys.exit(1)

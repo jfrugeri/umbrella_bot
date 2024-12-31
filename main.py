@@ -1,8 +1,6 @@
-import sys, os
 from  colorama import Fore, Style
-
+import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "src/modules")))
-
 from src.modules import openweather, organizer, checker, email_alert
 
 if __name__ == "__main__":

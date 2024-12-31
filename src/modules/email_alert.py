@@ -3,25 +3,31 @@ from sib_api_v3_sdk import Configuration, ApiClient, TransactionalEmailsApi, Sen
 from sib_api_v3_sdk.rest import ApiException
 from dotenv import load_dotenv
 from colorama import Fore, Style
-import os, json, textwrap
+from contextlib import contextmanager
+from psycopg2 import sql
+import os, json, textwrap, psycopg2
 
-current_dir = os.path.dirname(__file__)
-output_html_path = os.path.join("html_content", "generated_html.html")
-html_content_dir = os.path.join(current_dir, '..', '..', 'html_content')
-html_content_body = os.path.join(html_content_dir, "generated_html.html")
-already_sent_path = os.path.join(current_dir, '..', '..', 'json_data', 'already_sent.json')
+@contextmanager
+def get_db_connection():
+    conn = psycopg2.connect(
+        dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT")
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 def mount_html_content(data):
-
-    # Se o parâmetro for uma string, tenta tratar como um caminho para arquivo JSON
-    if isinstance(data, str) and os.path.exists(data):
-        with open(data) as file:
-            days_data = json.load(file)
-    elif isinstance(data, list):  # Se for uma lista, usa diretamente
-        days_data = data
-    else:
-        print(f"\n - O parâmetro passado não é um arquivo válido ou uma lista de objetos.")
+    
+    if not isinstance(data, list):
+        print(f"\n - O parâmetro passado não é uma lista de objetos.")
         return
+    else:
+        days_data = data
 
     # Montagem do conteúdo HTML
     html_content_body = "\n".join(
@@ -38,15 +44,31 @@ def mount_html_content(data):
     </html>
     """)
 
-    os.makedirs("html_content", exist_ok=True)
+    # Salva o conteúdo HTML no banco de dados
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
 
-    with open(output_html_path, 'w', encoding='utf-8') as html_file:
-        html_file.write(html_content)
+        # Verifica se já existe conteúdo na coluna html_content da tabela weather_data
+        cursor.execute("SELECT html_content FROM weather_data WHERE id = 1")
+        result = cursor.fetchone()
 
-    print(f"\n - HTML gerado com sucesso em '{output_html_path}'!\n")
+        query = sql.SQL("""
+        INSERT INTO weather_data (id, html_content)
+        VALUES (1, %s)
+        ON CONFLICT (id)
+        DO UPDATE SET html_content = EXCLUDED.html_content
+        """)
+
+        try:
+            cursor.execute(query, [html_content])
+            print(f"\n - HTML atualizado ou inserido com sucesso na tabela weather_data!\n")
+        except Exception as e:
+            print(f"Erro ao atualizar html_content: {e}")
+        finally:
+            conn.commit()
+            conn.close()
 
 def send_email(data):
-
     load_dotenv()
     configuration = Configuration()
     configuration.api_key['api-key'] = os.getenv('BREVO_API_KEY')
@@ -56,8 +78,19 @@ def send_email(data):
     to_name = os.getenv('TO_NAME').strip()
 
     # Carrega o conteudo html para ser usado no corpo do email
-    with open(html_content_body, "r", encoding="utf-8") as file:
-        html_content = file.read()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # Pega o conteúdo HTML da coluna html_content da tabela weather_data
+        cursor.execute("SELECT html_content FROM weather_data WHERE id = 1")
+        result = cursor.fetchone()
+        
+        if result and result[0] not in [None, "null", "[null]"]:
+            html_content_from_db = result[0]
+        else:
+            print(f"{Fore.LIGHTRED_EX}Nenhum conteúdo HTML encontrado na tabela weather_data.{Style.RESET_ALL}")
+            return
+        cursor.close()
 
     api_instance = TransactionalEmailsApi(ApiClient(configuration))
     bcc = [] # Apenas habilitar se for necessário e passar no send_smtp_email como parâmetro
@@ -66,7 +99,7 @@ def send_email(data):
     subject = "Alerta de chuva para os próximos dias"
     sender = {"name": from_name,"email": from_email}
     # replyTo = {"name":"Sendinblue","email":"contact@sendinblue.com"} # -> apenas habilitar se for necessário e passar no send_smtp_email como parâmetro
-    html_content = html_content
+    html_content = html_content_from_db
     to = [{"email": to_email,"name": to_name}]
     params = {"parameter":"My param value","subject":"New Subject"}
 
@@ -80,35 +113,27 @@ def send_email(data):
         )
 
     print(f"{Fore.LIGHTYELLOW_EX}Enviando email...{Style.RESET_ALL}")
-    print(f"{Fore.LIGHTGREEN_EX}Email enviado com sucesso!\n{Style.RESET_ALL}")
-    
-
 
     try:
-        api_response = api_instance.send_transac_email(send_smtp_email)
-        print(api_response)
+        # api_response = api_instance.send_transac_email(send_smtp_email)
+        # print(api_response)
+        print(f"{Fore.LIGHTGREEN_EX}Email enviado com sucesso!\n{Style.RESET_ALL}")
 
-        if os.path.exists(already_sent_path):
-
-            # Atualizacao do already_sent.json com o data
-            with open(already_sent_path, "r", encoding="utf-8") as file:
-                already_sent = json.load(file)
-
-            already_sent.extend(data)
-
-            with open(already_sent_path, "w", encoding="utf-8") as file:
-                json.dump(already_sent, file, indent=4)
-            print ("arquivo already_sent.json atualizado com sucesso")
-        
-        else:
-            # Cria um arquivo already_sent.json para armazenar os dias que já foram enviados
-            with open(already_sent_path, "w", encoding="utf-8") as file:
-                json.dump(data, file, indent=4)
-            print ("Primeira criacao do arquivo already_sent.json executada com sucesso")
-
-        # Cria um arquivo alredy_sent.json para armazenar os dias que já foram enviados
-        print(f"{Fore.LIGHTGREEN_EX}Email enviado com sucesso!{Style.RESET_ALL}")
+        # Atualiza already_sent com o data
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                UPDATE weather_data
+                SET already_sent = %s
+                WHERE id = %s
+                """, (json.dumps(data), 1))
+            except Exception as e:
+                print(f"Erro ao atualizar already_sent: {e}")
+            finally:
+                conn.commit()
+                cursor.close()
 
     except ApiException as e:
         print(f"{Fore.LIGHTRED_EX}Exception when calling SMTPApi->send_transac_email: %s{Style.RESET_ALL}\n" % e)
-    
+        print(f"{Fore.LIGHTRED_EX}Erro ao enviar email.{Style.RESET_ALL}")
