@@ -115,8 +115,8 @@ def send_email(data):
     print(f"{Fore.LIGHTYELLOW_EX}Enviando email...{Style.RESET_ALL}")
 
     try:
-        # api_response = api_instance.send_transac_email(send_smtp_email)
-        # print(api_response)
+        api_response = api_instance.send_transac_email(send_smtp_email)
+        print(api_response)
         print(f"{Fore.LIGHTGREEN_EX}Email enviado com sucesso!\n{Style.RESET_ALL}")
 
         # Atualiza already_sent com o data

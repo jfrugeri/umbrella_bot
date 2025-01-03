@@ -19,8 +19,8 @@ def log_response(message, status_code):
 @app.route('/main', methods=['GET'])
 def execute_main():
     client_ip = request.remote_addr
-    param = request.args.get('param')  # Obtém o parâmetro 'param' se existir
-
+    param = request.args.get('param')  # Obtém o parâmetro 'param'
+    
     # Verifica se o IP está na lista permitida
     if client_ip not in ALLOWED_IPS:
         return log_response("Forbidden", 403)
